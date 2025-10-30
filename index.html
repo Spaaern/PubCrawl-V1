@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Checkpoints</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="manifest.json" />
+</head>
+<body>
+  <header>
+    <h1>My Checkpoints</h1>
+    <button id="addCheckpointBtn">+ Add Checkpoint</button>
+  </header>
+
+  <section id="participants-section">
+    <h2>
+      Participants
+      <button id="toggleParticipantsBtn">Hide</button>
+    </h2>
+    <div id="participants-content">
+      <div id="participants-list"></div>
+      <input type="text" id="new-participant" placeholder="Add participant">
+      <button id="addParticipantBtn">Add</button>
+    </div>
+  </section>
+
+  <section id="scoreboard-section">
+    <h2>
+      Scoreboard
+      <button id="toggleScoreboardBtn">Hide</button>
+    </h2>
+    <div id="scoreboard-content">
+      <div id="scoreboard"></div>
+    </div>
+  </section>
+
+
+  <main id="checklist"></main>
+
+  <script src="script.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('service-worker.js');
+    }
+  </script>
+</body>
+</html>

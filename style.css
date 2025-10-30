@@ -1,0 +1,123 @@
+body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  margin: 0;
+  background: #f7f7f7;
+  color: #333;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #007aff;
+  color: white;
+  padding: 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+button {
+  background: #fff;
+  border: none;
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #e6e6e6;
+}
+
+.checkpoint {
+  background: white;
+  margin: 0.8rem;
+  border-radius: 10px;
+  padding: 0.8rem;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.checkpoint h2 {
+  display: flex;
+  align-items: center;
+  font-size: 1rem;
+}
+
+.checkpoint h2 input {
+  margin-right: 0.5rem;
+}
+
+.subtasks {
+  margin-left: 1.5rem;
+  margin-top: 0.5rem;
+}
+
+.subtasks label {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.3rem;
+}
+
+.subtasks input {
+  margin-right: 0.5rem;
+}
+
+.add-subtask {
+  margin-top: 0.3rem;
+  font-size: 0.8rem;
+  color: #007aff;
+  cursor: pointer;
+}
+
+.participant-checkbox {
+  margin-right: 0.5rem;
+}
+
+.check-all-btn {
+  font-size: 0.75rem;
+  color: #007aff;
+  margin-left: 0.5rem;
+  cursor: pointer;
+}
+
+#participants-section {
+  background: white;
+  margin: 0.8rem;
+  padding: 0.8rem;
+  border-radius: 10px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+#participants-list span {
+  margin-right: 0.5rem;
+}
+
+.checkpoint h2 button {
+  margin-left: 0.2rem;
+  font-size: 1rem;
+}
+
+.checkpoint-controls {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.checkpoint-controls button {
+  padding: 2px 8px;
+  font-size: 14px;
+}
+
+#scoreboard-section {
+  background: white;
+  margin: 1rem;
+  padding: 1rem;
+  border-radius: 10px;
+}
+#scoreboard div {
+  font-size: 1.1em;
+  margin: 0.25rem 0;
+}
