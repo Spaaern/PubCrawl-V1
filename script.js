@@ -115,7 +115,7 @@ function generateId() {
 // ---------------- SHARE DATA ------------------
 
 const shareBtn = document.createElement("button");
-shareBtn.textContent = "🔗 Share";
+shareBtn.textContent = "🔗";
 document.querySelector("header").appendChild(shareBtn);
 
 function generateShareLink() {
@@ -137,7 +137,7 @@ shareBtn.onclick = () => {
 
 // ---------------- EXPORT DATA -----------------
 const exportBtn = document.createElement("button");
-exportBtn.textContent = "⬇ Export";
+exportBtn.textContent = "⬇";
 document.querySelector("header").appendChild(exportBtn);
 
 function exportData() {
@@ -164,7 +164,7 @@ exportBtn.onclick = exportData;
 
 // ---------------- IMPORT DATA ----------------
 const importBtn = document.createElement("button");
-importBtn.textContent = "⬆ Import";
+importBtn.textContent = "⬆";
 document.querySelector("header").appendChild(importBtn);
 
 function buildSharePayload() {
