@@ -1,18 +1,58 @@
+const STATE_VERSION = 1;
 const checklistEl = document.getElementById("checklist");
 const addCheckpointBtn = document.getElementById("addCheckpointBtn");
-
 const participantsListEl = document.getElementById("participants-list");
 const newParticipantInput = document.getElementById("new-participant");
 const addParticipantBtn = document.getElementById("addParticipantBtn");
+
+// Normalize State
+function normalizeState() {
+  checkpoints = checkpoints.map(c => {
+    const normalized = {
+      id: c.id ?? generateId(),
+      name: c.name ?? "Unnamed checkpoint",
+      expanded: c.expanded ?? true,
+      owner: participants.includes(c.owner) ? c.owner : null,
+      subtasks: (c.subtasks || []).map(st => ({
+        id: st.id ?? generateId(),
+        name: st.name ?? "Unnamed subtask",
+        participants: Object.fromEntries(
+          Object.entries(st.participants || {}).filter(([p]) =>
+            participants.includes(p)
+          )
+        )
+      }))
+    };
+
+    // derive completion
+    normalized.done =
+      normalized.subtasks.length > 0 &&
+      normalized.subtasks.every(
+        st =>
+          Object.values(st.participants).length > 0 &&
+          Object.values(st.participants).every(Boolean)
+      );
+
+    return normalized;
+  });
+}
 
 // Load or initialize participants
 let participants = JSON.parse(localStorage.getItem("participants") || "[]");
 
 // Load or initialize checkpoints
-let checkpoints = JSON.parse(localStorage.getItem("checkpoints") || "[]");
+const raw = JSON.parse(localStorage.getItem("checkpoints") || "{}");
+let checkpoints = raw.data || raw || [];
 
+normalizeState();
 renderParticipants();
 render();
+
+// ---------------- GENERATE ID -----------------
+
+function generateId() {
+  return Date.now() + Math.random();
+}
 
 // ---------------- PARTICIPANTS ----------------
 
@@ -102,65 +142,9 @@ function makeInlineEditable({
 addCheckpointBtn.onclick = () => {
   const name = prompt("Checkpoint name:");
   if (!name) return;
-  checkpoints.push({ id: Date.now(), name, done: false, subtasks: [] });
-  saveCheckpoints();
+  addCheckpoint(name);
   render();
 };
-
-function toggleCheckpoint(id) {
-  const c = checkpoints.find(c => c.id === id);
-  c.done = !c.done;
-  saveCheckpoints();
-  render();
-}
-
-function addSubtask(checkpointId) {
-  const name = prompt("Subtask name:");
-  if (!name) return;
-
-  const assigned = {};
-
-  participants.forEach(p => {
-    const shouldAssign = confirm(`Assign "${p}" to this subtask?`);
-    if (shouldAssign) {
-      assigned[p] = false;
-    }
-  });
-
-  const cp = checkpoints.find(c => c.id === checkpointId);
-
-  cp.subtasks.push({
-    id: Date.now(),
-    name,
-    participants: assigned
-  });
-
-  syncCheckpointCompletion(cp);
-  saveCheckpoints();
-  render();
-}
-
-function toggleParticipant(checkpointId, subtaskId, participantName) {
-  const cp = checkpoints.find(c => c.id === checkpointId);
-  const st = cp.subtasks.find(s => s.id === subtaskId);
-  st.participants[participantName] = !st.participants[participantName];
-  syncCheckpointCompletion(cp);
-  saveCheckpoints();
-  render();
-}
-
-function checkAllParticipants(checkpointId, subtaskId) {
-  const cp = checkpoints.find(c => c.id === checkpointId);
-  const st = cp.subtasks.find(s => s.id === subtaskId);
-
-  Object.keys(st.participants).forEach(p => {
-    st.participants[p] = true;
-  });
-
-  syncCheckpointCompletion(cp);
-  saveCheckpoints();
-  render();
-}
 
 function deleteCheckpoint(id) {
   checkpoints = checkpoints.filter(c => c.id !== id);
@@ -169,7 +153,10 @@ function deleteCheckpoint(id) {
 }
 
 function saveCheckpoints() {
-  localStorage.setItem("checkpoints", JSON.stringify(checkpoints));
+  localStorage.setItem(
+    "checkpoints",
+    JSON.stringify({ version: STATE_VERSION, data: checkpoints })
+  );
 }
 
 function moveCheckpoint(fromIndex, toIndex) {
@@ -333,14 +320,7 @@ function showSubtaskCreator(container, checkpoint) {
     const name = nameInput.value.trim();
     if (!name) return;
 
-    checkpoint.subtasks.push({
-      id: Date.now(),
-      name,
-      participants: assigned
-    });
-
-    syncCheckpointCompletion(checkpoint);
-    saveCheckpoints();
+    addSubtaskToCheckpoint(checkpoint, name, assigned);
     render();
   });
 
@@ -351,6 +331,48 @@ function showSubtaskCreator(container, checkpoint) {
 
   container.appendChild(creator);
   nameInput.focus();
+}
+
+// ---------------- STATE MUTATIONS ----------------
+
+function addCheckpoint(name) {
+  checkpoints.push({
+    id: generateId(),
+    name,
+    expanded: true,
+    owner: null,
+    subtasks: []
+  });
+  saveCheckpoints();
+}
+
+function addSubtaskToCheckpoint(checkpoint, name, participants) {
+  checkpoint.subtasks.push({
+    id: generateId(),
+    name,
+    participants
+  });
+  syncCheckpointCompletion(checkpoint);
+  saveCheckpoints();
+}
+
+function setCheckpointOwner(checkpoint, owner) {
+  checkpoint.owner = owner;
+  saveCheckpoints();
+}
+
+function toggleParticipantDone(checkpoint, subtask, participant) {
+  subtask.participants[participant] = !subtask.participants[participant];
+  syncCheckpointCompletion(checkpoint);
+  saveCheckpoints();
+}
+
+function checkAllSubtaskParticipants(checkpoint, subtask) {
+  Object.keys(subtask.participants).forEach(p => {
+    subtask.participants[p] = true;
+  });
+  syncCheckpointCompletion(checkpoint);
+  saveCheckpoints();
 }
 
 // ---------------- RENDERING ----------------
@@ -385,7 +407,7 @@ function render() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = c.done;
-    checkbox.addEventListener("change", () => toggleCheckpoint(c.id));
+    checkbox.disabled = true;
     h2.appendChild(checkbox);
 
     // Checkpoint name
@@ -431,8 +453,7 @@ function render() {
     });
 
     ownerSelect.addEventListener("change", () => {
-      c.owner = ownerSelect.value || null;
-      saveCheckpoints();
+      setCheckpointOwner(c, ownerSelect.value || null);
       render();
     });
 
@@ -493,7 +514,10 @@ function render() {
       const checkAllBtn = document.createElement("button");
       checkAllBtn.className = "check-all-btn";
       checkAllBtn.textContent = "Check All";
-      checkAllBtn.addEventListener("click", () => checkAllParticipants(c.id, st.id));
+      checkAllBtn.addEventListener("click", () => {
+        checkAllSubtaskParticipants(c, st);
+        render();
+      });
       stDiv.appendChild(checkAllBtn);
 
       // Participant checkboxes
@@ -505,7 +529,10 @@ function render() {
         input.type = "checkbox";
         input.className = "participant-checkbox";
         input.checked = st.participants[p];
-        input.addEventListener("change", () => toggleParticipant(c.id, st.id, p));
+        input.addEventListener("change", () => {
+          toggleParticipantDone(c, st, p);
+          render();
+        });
 
         label.appendChild(input);
         label.appendChild(document.createTextNode(" " + p));
@@ -530,14 +557,10 @@ function render() {
 
     div.appendChild(subtasksDiv);
     checklistEl.appendChild(div);
-    renderScoreboard();
   });
+  renderScoreboard();
 }
 
 // ---------------- EXPOSE FUNCTIONS TO GLOBAL SCOPE ----------------
-window.toggleCheckpoint = toggleCheckpoint;
-window.addSubtask = addSubtask;
-window.toggleParticipant = toggleParticipant;
-window.checkAllParticipants = checkAllParticipants;
 window.deleteCheckpoint = deleteCheckpoint;
 window.confirmDelete = confirmDelete;
