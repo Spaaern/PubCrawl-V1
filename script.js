@@ -29,7 +29,10 @@ addParticipantBtn.onclick = () => {
 function removeParticipant(name) {
   participants = participants.filter(p => p !== name);
   // Remove participant from all subtasks
-  checkpoints.forEach(c => c.subtasks.forEach(s => delete s.participants[name]));
+  checkpoints.forEach(c => {
+    if (c.owner === name) c.owner = null;
+    c.subtasks.forEach(s => delete s.participants[name]);
+  });
   saveParticipants();
   saveCheckpoints();
   renderParticipants();
@@ -114,10 +117,25 @@ function toggleCheckpoint(id) {
 function addSubtask(checkpointId) {
   const name = prompt("Subtask name:");
   if (!name) return;
+
+  const assigned = {};
+
+  participants.forEach(p => {
+    const shouldAssign = confirm(`Assign "${p}" to this subtask?`);
+    if (shouldAssign) {
+      assigned[p] = false;
+    }
+  });
+
   const cp = checkpoints.find(c => c.id === checkpointId);
-  const participantsObj = {};
-  participants.forEach(p => (participantsObj[p] = false));
-  cp.subtasks.push({ id: Date.now(), name, participants: participantsObj });
+
+  cp.subtasks.push({
+    id: Date.now(),
+    name,
+    participants: assigned
+  });
+
+  syncCheckpointCompletion(cp);
   saveCheckpoints();
   render();
 }
@@ -126,6 +144,7 @@ function toggleParticipant(checkpointId, subtaskId, participantName) {
   const cp = checkpoints.find(c => c.id === checkpointId);
   const st = cp.subtasks.find(s => s.id === subtaskId);
   st.participants[participantName] = !st.participants[participantName];
+  syncCheckpointCompletion(cp);
   saveCheckpoints();
   render();
 }
@@ -133,7 +152,12 @@ function toggleParticipant(checkpointId, subtaskId, participantName) {
 function checkAllParticipants(checkpointId, subtaskId) {
   const cp = checkpoints.find(c => c.id === checkpointId);
   const st = cp.subtasks.find(s => s.id === subtaskId);
-  participants.forEach(p => (st.participants[p] = true));
+
+  Object.keys(st.participants).forEach(p => {
+    st.participants[p] = true;
+  });
+
+  syncCheckpointCompletion(cp);
   saveCheckpoints();
   render();
 }
@@ -230,6 +254,105 @@ function calculateScores() {
   return scores;
 }
 
+// Progress Summary per checkpoint:
+
+function isSubtaskComplete(subtask) {
+  const values = Object.values(subtask.participants);
+  return values.length > 0 && values.every(Boolean);
+}
+
+function getCheckpointProgress(checkpoint) {
+  const total = checkpoint.subtasks.length;
+  const completed = checkpoint.subtasks.filter(isSubtaskComplete).length;
+  return { completed, total };
+}
+
+function syncCheckpointCompletion(checkpoint) {
+  const { completed, total } = getCheckpointProgress(checkpoint);
+  checkpoint.done = total > 0 && completed === total;
+}
+
+function showSubtaskCreator(container, checkpoint) {
+  // Prevent multiple creators
+  if (container.querySelector(".subtask-creator")) return;
+
+  const creator = document.createElement("div");
+  creator.className = "subtask-creator";
+  creator.style.marginTop = "0.5rem";
+  creator.style.padding = "0.5rem";
+  creator.style.border = "1px solid #ccc";
+  creator.style.borderRadius = "6px";
+  creator.style.background = "#f9f9f9";
+
+  // Name input
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.placeholder = "Subtask name";
+  nameInput.style.width = "100%";
+  nameInput.style.marginBottom = "0.4rem";
+
+  creator.appendChild(nameInput);
+
+  // Participant selector
+  const participantsDiv = document.createElement("div");
+  participantsDiv.style.marginBottom = "0.4rem";
+
+  const assigned = {};
+
+  participants.forEach(p => {
+    const label = document.createElement("label");
+    label.style.marginRight = "0.6rem";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        assigned[p] = false;
+      } else {
+        delete assigned[p];
+      }
+    });
+
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(" " + p));
+    participantsDiv.appendChild(label);
+  });
+
+  creator.appendChild(participantsDiv);
+
+  // Buttons
+  const createBtn = document.createElement("button");
+  createBtn.textContent = "Create";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.style.marginLeft = "0.5rem";
+
+  createBtn.addEventListener("click", () => {
+    const name = nameInput.value.trim();
+    if (!name) return;
+
+    checkpoint.subtasks.push({
+      id: Date.now(),
+      name,
+      participants: assigned
+    });
+
+    syncCheckpointCompletion(checkpoint);
+    saveCheckpoints();
+    render();
+  });
+
+  cancelBtn.addEventListener("click", () => creator.remove());
+
+  creator.appendChild(createBtn);
+  creator.appendChild(cancelBtn);
+
+  container.appendChild(creator);
+  nameInput.focus();
+}
+
 // ---------------- RENDERING ----------------
 function render() {
   checklistEl.innerHTML = "";
@@ -278,6 +401,51 @@ function render() {
     h2.appendChild(document.createTextNode(" "));
     h2.appendChild(nameEditor);
     h2.appendChild(document.createTextNode(" "));
+
+    const progress = getCheckpointProgress(c);
+
+    if (progress.total > 0) {
+      const progressSpan = document.createElement("span");
+      progressSpan.style.marginLeft = "0.5rem";
+      progressSpan.style.fontSize = "0.8rem";
+      progressSpan.style.opacity = "0.7";
+      progressSpan.textContent = `✔ ${progress.completed} / ${progress.total}`;
+      h2.appendChild(progressSpan);
+    }
+
+    // Owner selector
+    const ownerSelect = document.createElement("select");
+    ownerSelect.style.marginLeft = "0.5rem";
+
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "Owner";
+    ownerSelect.appendChild(emptyOption);
+
+    participants.forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p;
+      opt.textContent = p;
+      if (c.owner === p) opt.selected = true;
+      ownerSelect.appendChild(opt);
+    });
+
+    ownerSelect.addEventListener("change", () => {
+      c.owner = ownerSelect.value || null;
+      saveCheckpoints();
+      render();
+    });
+
+    if (c.owner) {
+      const ownerLabel = document.createElement("span");
+      ownerLabel.textContent = `👤 ${c.owner}`;
+      ownerLabel.style.marginLeft = "0.4rem";
+      ownerLabel.style.fontSize = "0.8rem";
+      ownerLabel.style.opacity = "0.8";
+      h2.appendChild(ownerLabel);
+    }
+
+    h2.appendChild(ownerSelect);
 
     // Expand / Collapse button
     const toggleBtn = document.createElement("button");
@@ -352,7 +520,12 @@ function render() {
     const addSubtaskDiv = document.createElement("div");
     addSubtaskDiv.className = "add-subtask";
     addSubtaskDiv.textContent = "+ Add subtask";
-    addSubtaskDiv.addEventListener("click", () => addSubtask(c.id));
+    addSubtaskDiv.style.cursor = "pointer";
+
+    addSubtaskDiv.addEventListener("click", () => {
+      showSubtaskCreator(subtasksDiv, c);
+    });
+
     subtasksDiv.appendChild(addSubtaskDiv);
 
     div.appendChild(subtasksDiv);
