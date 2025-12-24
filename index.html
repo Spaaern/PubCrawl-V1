@@ -7,9 +7,17 @@
   <link rel="stylesheet" href="style.css" />
   <link rel="manifest" href="manifest.json" />
 </head>
+<nav id="bottomTabs" class="bottom-tabs">
+  <button id="hubTab" title="Hub">📋</button>
+  <button id="archiveTab" title="Archive">🗄️</button>
+</nav>
+
 <body>
   <header>
-    <h1>My Checkpoints</h1>
+    <h1 id="headerTitle">My Checkpoints</h1>
+    <button id="backToHubBtn" style="display: none;">
+    ← Back to hub
+    </button>
     <button id="addCheckpointBtn">+ Add Checkpoint</button>
   </header>
 
@@ -46,3 +54,18 @@
   </script>
 </body>
 </html>
+
+<style>
+  .bottom-tabs {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.5rem;
+    background: #fff;
+    border-top: 1px solid #ccc;
+  }
+</style>

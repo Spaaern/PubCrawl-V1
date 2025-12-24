@@ -1,14 +1,18 @@
 const STATE_VERSION = 1;
 const checklistEl = document.getElementById("checklist");
+const headerTitleEl = document.getElementById("headerTitle");
 const addCheckpointBtn = document.getElementById("addCheckpointBtn");
+const backToHubBtn = document.getElementById("backToHubBtn");
 const participantsListEl = document.getElementById("participants-list");
 const newParticipantInput = document.getElementById("new-participant");
 const addParticipantBtn = document.getElementById("addParticipantBtn");
+const hubTab = document.getElementById("hubTab");
+const archiveTab = document.getElementById("archiveTab");
 
 // Normalize State
 function normalizeState() {
   lists.forEach(list => {
-    list.participants ||= [];
+    list.participants = [...(list.participants || [])];
     list.checkpoints = (list.checkpoints || []).map(c => {
       const normalized = {
         id: c.id ?? generateId(),
@@ -68,6 +72,7 @@ function renderParticipants() {
 const hubRaw = JSON.parse(localStorage.getItem("hub") || "{}");
 let lists = hubRaw.lists || [];
 let activeListId = hubRaw.activeListId || null;
+let viewMode = "hub"; // "hub" | "list"
 
 // -------- MIGRATION: single list → hub --------
 if (lists.length === 0) {
@@ -81,7 +86,7 @@ if (lists.length === 0) {
     lists.push({
       id: listId,
       name: "My first list",
-      participants: legacyParticipants,
+      participants: [...legacyParticipants],
       checkpoints: legacyCheckpoints,
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -91,6 +96,7 @@ if (lists.length === 0) {
 
     localStorage.removeItem("participants");
     localStorage.removeItem("checkpoints");
+    cleanupArchivedLists();
     saveHub();
   }
 }
@@ -113,15 +119,13 @@ shareBtn.textContent = "🔗 Share";
 document.querySelector("header").appendChild(shareBtn);
 
 function generateShareLink() {
-  const list = getActiveList();
-  if (!list) return null;
+  const payload = buildSharePayload();
+  if (!payload) return null;
 
-  const payload = {
-    version: STATE_VERSION,
-    list
-  };
+  const encoded = btoa(
+    encodeURIComponent(JSON.stringify(payload))
+  );
 
-  const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
   return `${location.origin}${location.pathname}#data=${encoded}`;
 }
 
@@ -137,13 +141,13 @@ exportBtn.textContent = "⬇ Export";
 document.querySelector("header").appendChild(exportBtn);
 
 function exportData() {
-  const list = getActiveList();
-  if (!list) return;
+  const payload = buildSharePayload();
+  if (!payload) return;
 
-  const payload = {
-    version: STATE_VERSION,
-    list
-  };
+  const filename =
+    payload.type === "hub"
+      ? "checklist-hub.json"
+      : `${payload.list.name || "list"}.json`;
 
   const blob = new Blob(
     [JSON.stringify(payload, null, 2)],
@@ -152,7 +156,7 @@ function exportData() {
 
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `${list.name || "list"}.json`;
+  a.download = filename;
   a.click();
 }
 
@@ -162,6 +166,26 @@ exportBtn.onclick = exportData;
 const importBtn = document.createElement("button");
 importBtn.textContent = "⬆ Import";
 document.querySelector("header").appendChild(importBtn);
+
+function buildSharePayload() {
+  if (viewMode === "list") {
+    const list = getActiveList();
+    if (!list) return null;
+
+    return {
+      version: STATE_VERSION,
+      type: "list",
+      list
+    };
+  }
+
+  // hub mode
+  return {
+    version: STATE_VERSION,
+    type: "hub",
+    lists
+  };
+}
 
 function importData(file) {
   const reader = new FileReader();
@@ -174,24 +198,40 @@ function importData(file) {
         throw new Error("Invalid file");
       }
 
-      // Validate version (future-proof)
       if (parsed.version !== STATE_VERSION) {
         console.warn("Version mismatch, attempting import anyway");
       }
 
-      const list = parsed.list;
-      if (!list) throw new Error("No list in import");
+      if (parsed.type === "hub") {
+        // ✅ Import entire hub
+        parsed.lists.forEach(incoming => {
+          const list = structuredClone(incoming);
+          list.id = generateId();
+          lists.push(list);
+        });
 
-      list.id = generateId();
-      lists.push(list);
-      activeListId = list.id;
+        activeListId = null;
+        viewMode = "hub";
+      }
+
+      else if (parsed.type === "list") {
+        // ✅ Import single list
+        const list = structuredClone(parsed.list);
+        list.id = generateId();
+        lists.push(list);
+
+        activeListId = list.id;
+        viewMode = "list";
+      }
+
+      else {
+        throw new Error("Unknown import type");
+      }
 
       normalizeState();
       saveHub();
-
-      localStorage.removeItem("uiState");
-      renderParticipants();
       render();
+
     } catch (err) {
       console.error(err);
       alert("Import failed: invalid or corrupted file");
@@ -224,26 +264,32 @@ function importFromUrl() {
     const json = decodeURIComponent(atob(encoded));
     const parsed = JSON.parse(json);
 
-    if (!parsed || typeof parsed !== "object") return;
+    if (!parsed) return;
 
-    if (parsed.version !== STATE_VERSION) {
-      console.warn("Version mismatch in shared link");
+    if (parsed.type === "hub") {
+      parsed.lists.forEach(incoming => {
+        const list = structuredClone(incoming);
+        list.id = generateId();
+        lists.push(list);
+      });
+
+      viewMode = "hub";
+      activeListId = null;
     }
 
+    else if (parsed.type === "list") {
+      const list = structuredClone(parsed.list);
+      list.id = generateId();
+      lists.push(list);
 
-    const list = parsed.list;
-    if (!list) throw new Error("No list in import");
-
-    list.id = generateId();
-    lists.push(list);
-    activeListId = list.id;
+      viewMode = "list";
+      activeListId = list.id;
+    }
 
     normalizeState();
     saveHub();
-
-    localStorage.removeItem("uiState");
-    renderParticipants();
     render();
+
   } catch (err) {
     console.error("Failed to import from URL", err);
   }
@@ -323,6 +369,8 @@ function makeInlineEditable({
 
   return span;
 }
+
+backToHubBtn.onclick = goToHub;
 
 addCheckpointBtn.onclick = () => {
   const name = prompt("Checkpoint name:");
@@ -513,6 +561,232 @@ function showSubtaskCreator(container, checkpoint) {
   nameInput.focus();
 }
 
+// ---------------- HUB STRUCTURE ------------------
+function setListUiVisible(visible) {
+  document.getElementById("participants-section").style.display = visible ? "block" : "none";
+  document.getElementById("scoreboard-section").style.display = visible ? "block" : "none";
+  document.getElementById("addCheckpointBtn").style.display = visible ? "inline-block" : "none";
+  backToHubBtn.style.display = visible ? "inline-block" : "none";
+}
+
+function updateHeaderTitle() {
+  if (viewMode === "list") {
+    const list = getActiveList();
+    headerTitleEl.textContent = list?.name || "Untitled list";
+  } else {
+    headerTitleEl.textContent = "Hub";
+  }
+}
+
+function openList(listId) {
+  activeListId = listId;
+  viewMode = "list";
+  saveHub();
+  renderParticipants()
+  render();
+}
+
+function goToHub() {
+  viewMode = "hub";
+  saveHub();
+  render();
+}
+
+function archiveList(listId) {
+  const list = lists.find(l => l.id === listId);
+  if (!list) return;
+
+  const ok = confirm(
+    `Archive "${list.name || "Untitled list"}"?\nYou can restore it within 30 days.`
+  );
+  if (!ok) return;
+
+  list.archivedAt = Date.now();
+
+  if (activeListId === listId) {
+    activeListId = null;
+    viewMode = "hub";
+  }
+
+  saveHub();
+  render();
+}
+
+function cleanupArchivedLists() {
+  const now = Date.now();
+  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+
+  lists = lists.filter(list => {
+    if (!list.archivedAt) return true;
+    return now - list.archivedAt < THIRTY_DAYS;
+  });
+}
+
+function renderHub() {
+  checklistEl.innerHTML = "";
+
+  const grid = document.createElement("div");
+  grid.style.display = "grid";
+  grid.style.gridTemplateColumns = "repeat(auto-fill, minmax(220px, 1fr))";
+  grid.style.gap = "1rem";
+
+  lists
+  .filter(list => !list.archivedAt)
+  .forEach(list => {
+    const card = document.createElement("div");
+    card.style.border = "1px solid #ccc";
+    card.style.borderRadius = "8px";
+    card.style.padding = "1rem";
+    card.style.cursor = "pointer";
+    card.style.background = "#fff";
+
+    const title = document.createElement("h3");
+    title.textContent = list.name || "Untitled list";
+    title.style.marginTop = "0";
+
+    const meta = document.createElement("div");
+    meta.style.fontSize = "0.8rem";
+    meta.style.opacity = "0.7";
+    meta.textContent = `${list.checkpoints.length} checkpoints`;
+
+    card.appendChild(title);
+    card.appendChild(meta);
+
+    card.addEventListener("click", () => openList(list.id));
+
+    // Delete button
+    const deleteBtn = document.createElement("button");
+    deleteBtn.textContent = "🗑";
+    deleteBtn.style.marginLeft = "0.5rem";
+    deleteBtn.style.float = "right";
+
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation(); // ⛔ prevent opening the list
+      archiveList(list.id);
+    });
+
+    title.appendChild(deleteBtn);
+
+    grid.appendChild(card);
+  });
+
+  // ➕ New list card
+  const newCard = document.createElement("div");
+  newCard.style.border = "2px dashed #aaa";
+  newCard.style.borderRadius = "8px";
+  newCard.style.padding = "1rem";
+  newCard.style.textAlign = "center";
+  newCard.style.cursor = "pointer";
+  newCard.textContent = "+ New list";
+
+  newCard.addEventListener("click", () => {
+    const name = prompt("List name:");
+    if (!name) return;
+
+    const id = generateId();
+    lists.push({
+      id,
+      name,
+      participants: [],
+      checkpoints: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+
+    activeListId = id;
+    viewMode = "list";
+    saveHub();
+    render();
+  });
+
+  grid.appendChild(newCard);
+  checklistEl.appendChild(grid);
+}
+
+hubTab.onclick = () => {
+  viewMode = "hub";
+  activeListId = null;
+  saveHub();
+  render();
+};
+
+archiveTab.onclick = () => {
+  viewMode = "archive";
+  activeListId = null;
+  saveHub();
+  render();
+};
+
+// ---------------- RENDER ARCHIVE ----------------
+
+function renderArchive() {
+  checklistEl.innerHTML = "";
+
+  const archivedLists = lists.filter(l => l.archivedAt);
+
+  if (archivedLists.length === 0) {
+    checklistEl.textContent = "No archived lists.";
+    return;
+  }
+
+  archivedLists.forEach(list => {
+    const card = document.createElement("div");
+    card.style.border = "1px solid #ccc";
+    card.style.borderRadius = "8px";
+    card.style.padding = "1rem";
+    card.style.marginBottom = "0.5rem";
+    card.style.background = "#f9f9f9";
+
+    const title = document.createElement("h3");
+    title.textContent = list.name || "Untitled list";
+
+    const meta = document.createElement("div");
+    const daysLeft = Math.max(
+      0,
+      30 - Math.floor((Date.now() - list.archivedAt) / (1000 * 60 * 60 * 24))
+    );
+    meta.textContent = `Archived • ${daysLeft} days left`;
+    meta.style.fontSize = "0.8rem";
+    meta.style.opacity = "0.7";
+
+    // Restore button
+    const restoreBtn = document.createElement("button");
+    restoreBtn.textContent = "Restore";
+    restoreBtn.onclick = () => restoreList(list.id);
+
+    // Delete permanently
+    const deleteBtn = document.createElement("button");
+    deleteBtn.textContent = "Delete permanently";
+    deleteBtn.style.marginLeft = "0.5rem";
+    deleteBtn.onclick = () => permanentlyDeleteList(list.id);
+
+    card.appendChild(title);
+    card.appendChild(meta);
+    card.appendChild(restoreBtn);
+    card.appendChild(deleteBtn);
+
+    checklistEl.appendChild(card);
+  });
+}
+
+function restoreList(listId) {
+  const list = lists.find(l => l.id === listId);
+  if (!list) return;
+
+  list.archivedAt = null;
+  saveHub();
+  render();
+}
+
+function permanentlyDeleteList(listId) {
+  const ok = confirm("This will permanently delete the list. This cannot be undone.");
+  if (!ok) return;
+
+  lists = lists.filter(l => l.id !== listId);
+  saveHub();
+  render();
+}
+
 // ---------------- STATE MUTATIONS ----------------
 function saveHub() {
   localStorage.setItem(
@@ -584,8 +858,27 @@ function checkAllSubtaskParticipants(checkpoint, subtask) {
 function render() {
   const participants = getParticipants();
   const checkpoints = getCheckpoints();
-
   checklistEl.innerHTML = "";
+
+  updateHeaderTitle();
+
+  if (viewMode === "hub") {
+    setListUiVisible(false);
+    renderHub();
+    return;
+  }
+
+  if (viewMode === "archive") {
+   setListUiVisible(false);
+    renderArchive();
+    return;
+  }
+
+  if (viewMode === "list") {
+    renderParticipants();
+  }
+
+  setListUiVisible(true);
 
   checkpoints.forEach((c, index) => {
     const div = document.createElement("div");
