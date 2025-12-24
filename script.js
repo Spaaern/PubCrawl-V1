@@ -46,12 +46,168 @@ let checkpoints = raw.data || raw || [];
 
 normalizeState();
 renderParticipants();
+importFromUrl();
 render();
 
 // ---------------- GENERATE ID -----------------
 
 function generateId() {
   return Date.now() + Math.random();
+}
+
+// ---------------- SHARE DATA ------------------
+
+const shareBtn = document.createElement("button");
+shareBtn.textContent = "🔗 Share";
+document.querySelector("header").appendChild(shareBtn);
+
+function generateShareLink() {
+  const payload = {
+    version: STATE_VERSION,
+    participants,
+    checkpoints
+  };
+
+  const json = JSON.stringify(payload);
+  const encoded = btoa(encodeURIComponent(json));
+
+  const url = `${location.origin}${location.pathname}#data=${encoded}`;
+  return url;
+}
+
+shareBtn.onclick = () => {
+  const link = generateShareLink();
+  navigator.clipboard.writeText(link);
+  alert("Share link copied to clipboard!");
+};
+
+// ---------------- EXPORT DATA -----------------
+const exportBtn = document.createElement("button");
+exportBtn.textContent = "⬇ Export";
+document.querySelector("header").appendChild(exportBtn);
+
+function exportData() {
+  const payload = {
+    version: STATE_VERSION,
+    participants,
+    checkpoints
+  };
+
+  const blob = new Blob(
+    [JSON.stringify(payload, null, 2)],
+    { type: "application/json" }
+  );
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "my-checkpoints.json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+exportBtn.onclick = exportData;
+
+// ---------------- IMPORT DATA ----------------
+const importBtn = document.createElement("button");
+importBtn.textContent = "⬆ Import";
+document.querySelector("header").appendChild(importBtn);
+
+function importData(file) {
+  const reader = new FileReader();
+
+  reader.onload = e => {
+    try {
+      const parsed = JSON.parse(e.target.result);
+
+      if (!parsed || typeof parsed !== "object") {
+        throw new Error("Invalid file");
+      }
+
+      // Validate version (future-proof)
+      if (parsed.version !== STATE_VERSION) {
+        console.warn("Version mismatch, attempting import anyway");
+      }
+
+      // Extract runtime data ONLY
+      participants = Array.isArray(parsed.participants)
+        ? parsed.participants
+        : [];
+
+      checkpoints = Array.isArray(parsed.checkpoints)
+        ? parsed.checkpoints
+        : [];
+
+      // Normalize BEFORE saving
+      normalizeState();
+
+      // Persist normalized runtime state
+      saveParticipants();
+      saveCheckpoints();
+
+      localStorage.removeItem("uiState");
+      // Re-render UI
+      renderParticipants();
+      render();
+
+    } catch (err) {
+      console.error(err);
+      alert("Import failed: invalid or corrupted file");
+    }
+  };
+
+  reader.readAsText(file);
+}
+
+importBtn.onclick = () => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "application/json";
+
+  input.onchange = () => {
+    if (input.files.length > 0) {
+      importData(input.files[0]);
+    }
+  };
+
+  input.click();
+};
+
+function importFromUrl() {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#data=")) return;
+
+  try {
+    const encoded = hash.slice(6);
+    const json = decodeURIComponent(atob(encoded));
+    const parsed = JSON.parse(json);
+
+    if (!parsed || typeof parsed !== "object") return;
+
+    if (parsed.version !== STATE_VERSION) {
+      console.warn("Version mismatch in shared link");
+    }
+
+    participants = Array.isArray(parsed.participants)
+      ? parsed.participants
+      : [];
+
+    checkpoints = Array.isArray(parsed.checkpoints)
+      ? parsed.checkpoints
+      : [];
+
+    normalizeState();
+    saveParticipants();
+    saveCheckpoints();
+
+    // Clear hash so refresh doesn’t re-import
+    history.replaceState(null, "", location.pathname);
+    localStorage.removeItem("uiState");
+    renderParticipants();
+    render();
+  } catch (err) {
+    console.error("Failed to import from URL", err);
+  }
 }
 
 // ---------------- PARTICIPANTS ----------------
