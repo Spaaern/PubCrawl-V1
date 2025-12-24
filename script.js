@@ -55,6 +55,47 @@ function renderParticipants() {
 
 // ---------------- CHECKPOINTS ----------------
 
+function makeInlineEditable({
+  text,
+  onSave
+}) {
+  const span = document.createElement("span");
+  span.textContent = text;
+  span.style.cursor = "pointer";
+
+  span.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = text;
+    input.style.fontSize = "inherit";
+    input.style.width = "80%";
+
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const cancel = () => {
+      input.replaceWith(span);
+    };
+
+    const save = () => {
+      const newValue = input.value.trim();
+      if (newValue && newValue !== text) {
+        onSave(newValue);
+      }
+      cancel();
+    };
+
+    input.addEventListener("blur", save);
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") save();
+      if (e.key === "Escape") cancel();
+    });
+  });
+
+  return span;
+}
+
 addCheckpointBtn.onclick = () => {
   const name = prompt("Checkpoint name:");
   if (!name) return;
@@ -225,8 +266,18 @@ function render() {
     h2.appendChild(checkbox);
 
     // Checkpoint name
-    const nameText = document.createTextNode(" " + c.name + " ");
-    h2.appendChild(nameText);
+    const nameEditor = makeInlineEditable({
+      text: c.name,
+      onSave: newName => {
+        c.name = newName;
+        saveCheckpoints();
+        render();
+      }
+    });
+
+    h2.appendChild(document.createTextNode(" "));
+    h2.appendChild(nameEditor);
+    h2.appendChild(document.createTextNode(" "));
 
     // Expand / Collapse button
     const toggleBtn = document.createElement("button");
@@ -257,9 +308,18 @@ function render() {
       const stDiv = document.createElement("div");
 
       // Subtask name
-      const stName = document.createElement("strong");
-      stName.textContent = st.name;
-      stDiv.appendChild(stName);
+      const stNameEditor = makeInlineEditable({
+        text: st.name,
+        onSave: newName => {
+          st.name = newName;
+          saveCheckpoints();
+          render();
+        }
+      });
+
+      const stNameWrapper = document.createElement("strong");
+      stNameWrapper.appendChild(stNameEditor);
+      stDiv.appendChild(stNameWrapper);
 
       // Check All button
       const checkAllBtn = document.createElement("button");
