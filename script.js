@@ -7,46 +7,97 @@ const addParticipantBtn = document.getElementById("addParticipantBtn");
 
 // Normalize State
 function normalizeState() {
-  checkpoints = checkpoints.map(c => {
-    const normalized = {
-      id: c.id ?? generateId(),
-      name: c.name ?? "Unnamed checkpoint",
-      expanded: c.expanded ?? true,
-      owner: participants.includes(c.owner) ? c.owner : null,
-      subtasks: (c.subtasks || []).map(st => ({
-        id: st.id ?? generateId(),
-        name: st.name ?? "Unnamed subtask",
-        participants: Object.fromEntries(
-          Object.entries(st.participants || {}).filter(([p]) =>
-            participants.includes(p)
+  lists.forEach(list => {
+    list.participants ||= [];
+    list.checkpoints = (list.checkpoints || []).map(c => {
+      const normalized = {
+        id: c.id ?? generateId(),
+        name: c.name ?? "Unnamed checkpoint",
+        expanded: c.expanded ?? true,
+        owner: list.participants.includes(c.owner) ? c.owner : null,
+        subtasks: (c.subtasks || []).map(st => ({
+          id: st.id ?? generateId(),
+          name: st.name ?? "Unnamed subtask",
+          participants: Object.fromEntries(
+            Object.entries(st.participants || {}).filter(([p]) =>
+              list.participants.includes(p)
+            )
           )
-        )
-      }))
-    };
+        }))
+      };
 
-    // derive completion
-    normalized.done =
-      normalized.subtasks.length > 0 &&
-      normalized.subtasks.every(
-        st =>
-          Object.values(st.participants).length > 0 &&
-          Object.values(st.participants).every(Boolean)
-      );
+      normalized.done =
+        normalized.subtasks.length > 0 &&
+        normalized.subtasks.every(st => {
+          const vals = Object.values(st.participants);
+          return vals.length > 0 && vals.every(Boolean);
+        });
 
-    return normalized;
+      return normalized;
+    });
   });
 }
 
-// Load or initialize participants
-let participants = JSON.parse(localStorage.getItem("participants") || "[]");
+function renderParticipants() {
+  const list = getActiveList();
+  if (!list) return;
 
-// Load or initialize checkpoints
-const raw = JSON.parse(localStorage.getItem("checkpoints") || "{}");
-let checkpoints = raw.data || raw || [];
+  participantsListEl.innerHTML = "";
 
+  list.participants.forEach(name => {
+    const div = document.createElement("div");
+    div.style.display = "flex";
+    div.style.alignItems = "center";
+    div.style.marginBottom = "0.25rem";
+
+    const span = document.createElement("span");
+    span.textContent = name;
+    span.style.flex = "1";
+
+    const removeBtn = document.createElement("button");
+    removeBtn.textContent = "✕";
+    removeBtn.style.marginLeft = "0.5rem";
+    removeBtn.addEventListener("click", () => removeParticipant(name));
+
+    div.appendChild(span);
+    div.appendChild(removeBtn);
+    participantsListEl.appendChild(div);
+  });
+}
+
+const hubRaw = JSON.parse(localStorage.getItem("hub") || "{}");
+let lists = hubRaw.lists || [];
+let activeListId = hubRaw.activeListId || null;
+
+// -------- MIGRATION: single list → hub --------
+if (lists.length === 0) {
+  const legacyParticipants = JSON.parse(localStorage.getItem("participants") || "[]");
+  const legacyRaw = JSON.parse(localStorage.getItem("checkpoints") || "{}");
+  const legacyCheckpoints = legacyRaw.data || legacyRaw || [];
+
+  if (legacyCheckpoints.length > 0) {
+    const listId = generateId();
+
+    lists.push({
+      id: listId,
+      name: "My first list",
+      participants: legacyParticipants,
+      checkpoints: legacyCheckpoints,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+
+    activeListId = listId;
+
+    localStorage.removeItem("participants");
+    localStorage.removeItem("checkpoints");
+    saveHub();
+  }
+}
+
+importFromUrl();
 normalizeState();
 renderParticipants();
-importFromUrl();
 render();
 
 // ---------------- GENERATE ID -----------------
@@ -62,17 +113,16 @@ shareBtn.textContent = "🔗 Share";
 document.querySelector("header").appendChild(shareBtn);
 
 function generateShareLink() {
+  const list = getActiveList();
+  if (!list) return null;
+
   const payload = {
     version: STATE_VERSION,
-    participants,
-    checkpoints
+    list
   };
 
-  const json = JSON.stringify(payload);
-  const encoded = btoa(encodeURIComponent(json));
-
-  const url = `${location.origin}${location.pathname}#data=${encoded}`;
-  return url;
+  const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
+  return `${location.origin}${location.pathname}#data=${encoded}`;
 }
 
 shareBtn.onclick = () => {
@@ -87,10 +137,12 @@ exportBtn.textContent = "⬇ Export";
 document.querySelector("header").appendChild(exportBtn);
 
 function exportData() {
+  const list = getActiveList();
+  if (!list) return;
+
   const payload = {
     version: STATE_VERSION,
-    participants,
-    checkpoints
+    list
   };
 
   const blob = new Blob(
@@ -98,12 +150,10 @@ function exportData() {
     { type: "application/json" }
   );
 
-  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = "my-checkpoints.json";
+  a.href = URL.createObjectURL(blob);
+  a.download = `${list.name || "list"}.json`;
   a.click();
-  URL.revokeObjectURL(url);
 }
 
 exportBtn.onclick = exportData;
@@ -129,27 +179,19 @@ function importData(file) {
         console.warn("Version mismatch, attempting import anyway");
       }
 
-      // Extract runtime data ONLY
-      participants = Array.isArray(parsed.participants)
-        ? parsed.participants
-        : [];
+      const list = parsed.list;
+      if (!list) throw new Error("No list in import");
 
-      checkpoints = Array.isArray(parsed.checkpoints)
-        ? parsed.checkpoints
-        : [];
+      list.id = generateId();
+      lists.push(list);
+      activeListId = list.id;
 
-      // Normalize BEFORE saving
       normalizeState();
-
-      // Persist normalized runtime state
-      saveParticipants();
-      saveCheckpoints();
+      saveHub();
 
       localStorage.removeItem("uiState");
-      // Re-render UI
       renderParticipants();
       render();
-
     } catch (err) {
       console.error(err);
       alert("Import failed: invalid or corrupted file");
@@ -188,20 +230,17 @@ function importFromUrl() {
       console.warn("Version mismatch in shared link");
     }
 
-    participants = Array.isArray(parsed.participants)
-      ? parsed.participants
-      : [];
 
-    checkpoints = Array.isArray(parsed.checkpoints)
-      ? parsed.checkpoints
-      : [];
+    const list = parsed.list;
+    if (!list) throw new Error("No list in import");
+
+    list.id = generateId();
+    lists.push(list);
+    activeListId = list.id;
 
     normalizeState();
-    saveParticipants();
-    saveCheckpoints();
+    saveHub();
 
-    // Clear hash so refresh doesn’t re-import
-    history.replaceState(null, "", location.pathname);
     localStorage.removeItem("uiState");
     renderParticipants();
     render();
@@ -214,42 +253,32 @@ function importFromUrl() {
 
 addParticipantBtn.onclick = () => {
   const name = newParticipantInput.value.trim();
-  if (!name || participants.includes(name)) return;
-  participants.push(name);
+  if (!name) return;
+
+  const list = getActiveList();
+  if (!list || list.participants.includes(name)) return;
+
+  list.participants.push(name);
   newParticipantInput.value = "";
-  saveParticipants();
+  saveHub();
   renderParticipants();
-  render(); // Re-render checklist to include new participant checkboxes
+  render();
 };
 
 function removeParticipant(name) {
-  participants = participants.filter(p => p !== name);
-  // Remove participant from all subtasks
-  checkpoints.forEach(c => {
+  const list = getActiveList();
+  if (!list) return;
+
+  list.participants = list.participants.filter(p => p !== name);
+
+  list.checkpoints.forEach(c => {
     if (c.owner === name) c.owner = null;
-    c.subtasks.forEach(s => delete s.participants[name]);
+    c.subtasks.forEach(st => delete st.participants[name]);
   });
-  saveParticipants();
-  saveCheckpoints();
+
+  saveHub();
   renderParticipants();
   render();
-}
-
-function saveParticipants() {
-  localStorage.setItem("participants", JSON.stringify(participants));
-}
-
-function renderParticipants() {
-  participantsListEl.innerHTML = "";
-  participants.forEach(name => {
-    const span = document.createElement("span");
-    span.textContent = name;
-    const removeBtn = document.createElement("button");
-    removeBtn.textContent = "❌";
-    removeBtn.onclick = () => removeParticipant(name);
-    span.appendChild(removeBtn);
-    participantsListEl.appendChild(span);
-  });
 }
 
 // ---------------- CHECKPOINTS ----------------
@@ -303,22 +332,17 @@ addCheckpointBtn.onclick = () => {
 };
 
 function deleteCheckpoint(id) {
-  checkpoints = checkpoints.filter(c => c.id !== id);
-  saveCheckpoints();
+  const list = getActiveList();
+  list.checkpoints = list.checkpoints.filter(c => c.id !== id);
+  saveHub();
   render();
 }
 
-function saveCheckpoints() {
-  localStorage.setItem(
-    "checkpoints",
-    JSON.stringify({ version: STATE_VERSION, data: checkpoints })
-  );
-}
-
 function moveCheckpoint(fromIndex, toIndex) {
-  const movedItem = checkpoints.splice(fromIndex, 1)[0];
-  checkpoints.splice(toIndex, 0, movedItem);
-  saveCheckpoints();
+  const list = getActiveList();
+  const movedItem = list.checkpoints.splice(fromIndex, 1)[0];
+  list.checkpoints.splice(toIndex, 0, movedItem);
+  saveHub();
   render();
 }
 
@@ -386,7 +410,7 @@ toggleScoreboardBtn.addEventListener("click", () => {
 
 function calculateScores() {
   const scores = {};
-  checkpoints.forEach(c => {
+  getCheckpoints().forEach(c => {
     c.subtasks.forEach(st => {
       Object.entries(st.participants).forEach(([name, done]) => {
         if (!scores[name]) scores[name] = 0;
@@ -442,7 +466,7 @@ function showSubtaskCreator(container, checkpoint) {
 
   const assigned = {};
 
-  participants.forEach(p => {
+  getParticipants().forEach(p => {
     const label = document.createElement("label");
     label.style.marginRight = "0.6rem";
 
@@ -490,16 +514,41 @@ function showSubtaskCreator(container, checkpoint) {
 }
 
 // ---------------- STATE MUTATIONS ----------------
+function saveHub() {
+  localStorage.setItem(
+    "hub",
+    JSON.stringify({
+      version: STATE_VERSION,
+      lists,
+      activeListId
+    })
+  );
+}
+
+function getActiveList() {
+  return lists.find(l => l.id === activeListId);
+}
+
+function getParticipants() {
+  return getActiveList()?.participants || [];
+}
+
+function getCheckpoints() {
+  return getActiveList()?.checkpoints || [];
+}
 
 function addCheckpoint(name) {
-  checkpoints.push({
+  const list = getActiveList();
+  if (!list) return;
+
+  list.checkpoints.push({
     id: generateId(),
     name,
     expanded: true,
     owner: null,
     subtasks: []
   });
-  saveCheckpoints();
+  saveHub();
 }
 
 function addSubtaskToCheckpoint(checkpoint, name, participants) {
@@ -509,18 +558,18 @@ function addSubtaskToCheckpoint(checkpoint, name, participants) {
     participants
   });
   syncCheckpointCompletion(checkpoint);
-  saveCheckpoints();
+  saveHub();
 }
 
 function setCheckpointOwner(checkpoint, owner) {
   checkpoint.owner = owner;
-  saveCheckpoints();
+  saveHub();
 }
 
 function toggleParticipantDone(checkpoint, subtask, participant) {
   subtask.participants[participant] = !subtask.participants[participant];
   syncCheckpointCompletion(checkpoint);
-  saveCheckpoints();
+  saveHub();
 }
 
 function checkAllSubtaskParticipants(checkpoint, subtask) {
@@ -528,11 +577,14 @@ function checkAllSubtaskParticipants(checkpoint, subtask) {
     subtask.participants[p] = true;
   });
   syncCheckpointCompletion(checkpoint);
-  saveCheckpoints();
+  saveHub();
 }
 
 // ---------------- RENDERING ----------------
 function render() {
+  const participants = getParticipants();
+  const checkpoints = getCheckpoints();
+
   checklistEl.innerHTML = "";
 
   checkpoints.forEach((c, index) => {
@@ -571,7 +623,7 @@ function render() {
       text: c.name,
       onSave: newName => {
         c.name = newName;
-        saveCheckpoints();
+        saveHub();
         render();
       }
     });
@@ -630,7 +682,7 @@ function render() {
     toggleBtn.style.marginLeft = "0.5rem";
     toggleBtn.addEventListener("click", () => {
       c.expanded = !c.expanded;
-      saveCheckpoints();
+      saveHub();
       render();
     });
     h2.appendChild(toggleBtn);
@@ -657,7 +709,7 @@ function render() {
         text: st.name,
         onSave: newName => {
           st.name = newName;
-          saveCheckpoints();
+          saveHub();
           render();
         }
       });
