@@ -1,0 +1,33 @@
+import WebSocket from "ws";
+
+const wss = new WebSocket.Server({ port: 3000 });
+const rooms = {};
+
+wss.on("connection", ws => {
+  let room = null;
+
+  ws.on("message", msg => {
+    const data = JSON.parse(msg);
+
+    if (data.type === "join") {
+      room = data.shareId;
+      rooms[room] ??= new Set();
+      rooms[room].add(ws);
+    }
+
+    if (data.type === "op") {
+      rooms[room]?.forEach(client => {
+        if (client !== ws && client.readyState === 1) {
+          client.send(JSON.stringify({
+            type: "op",
+            op: data.op
+          }));
+        }
+      });
+    }
+  });
+
+  ws.on("close", () => {
+    if (room) rooms[room]?.delete(ws);
+  });
+});

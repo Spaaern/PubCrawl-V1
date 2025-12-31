@@ -8,6 +8,8 @@ const newParticipantInput = document.getElementById("new-participant");
 const addParticipantBtn = document.getElementById("addParticipantBtn");
 const hubTab = document.getElementById("hubTab");
 const archiveTab = document.getElementById("archiveTab");
+let ws = null;
+let currentShareId = null;
 
 // Normalize State
 function normalizeState() {
@@ -74,6 +76,13 @@ let lists = hubRaw.lists || [];
 let activeListId = hubRaw.activeListId || null;
 let viewMode = "hub"; // "hub" | "list"
 
+lists.forEach(list => {
+  if (!list.shareId) {
+    list.shareId = generateShareId();
+  }
+});
+saveHub();
+
 // -------- MIGRATION: single list → hub --------
 if (lists.length === 0) {
   const legacyParticipants = JSON.parse(localStorage.getItem("participants") || "[]");
@@ -110,6 +119,32 @@ render();
 
 function generateId() {
   return Date.now() + Math.random();
+}
+
+function generateShareId() {
+  return crypto.randomUUID();
+}
+
+// ----------------  WEB SCOKET ------------------------
+
+function connectToServer(shareId) {
+  if (ws) ws.close();
+
+  ws = new WebSocket("ws://localhost:3000");
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: "join",
+      shareId
+    }));
+  };
+
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "op") {
+      applyOperation(msg.op, true);
+    }
+  };
 }
 
 // ---------------- SHARE DATA ------------------
@@ -375,8 +410,11 @@ backToHubBtn.onclick = goToHub;
 addCheckpointBtn.onclick = () => {
   const name = prompt("Checkpoint name:");
   if (!name) return;
-  addCheckpoint(name);
-  render();
+
+  applyOperation({
+    type: "addCheckpoint",
+    payload: { name }
+  });
 };
 
 function deleteCheckpoint(id) {
@@ -548,8 +586,14 @@ function showSubtaskCreator(container, checkpoint) {
     const name = nameInput.value.trim();
     if (!name) return;
 
-    addSubtaskToCheckpoint(checkpoint, name, assigned);
-    render();
+    applyOperation({
+      type: "addSubtask",
+      payload: {
+        checkpointId: checkpoint.id,
+        name,
+        participants: assigned
+      }
+    });
   });
 
   cancelBtn.addEventListener("click", () => creator.remove());
@@ -581,8 +625,13 @@ function updateHeaderTitle() {
 function openList(listId) {
   activeListId = listId;
   viewMode = "list";
+
+  const list = getActiveList();
+  currentShareId = list.shareId;
+  connectToServer(currentShareId);   // ✅ ADD THIS
+
   saveHub();
-  renderParticipants()
+  renderParticipants();
   render();
 }
 
@@ -684,8 +733,10 @@ function renderHub() {
     if (!name) return;
 
     const id = generateId();
+
     lists.push({
       id,
+      shareId: generateShareId(),
       name,
       participants: [],
       checkpoints: [],
@@ -854,6 +905,86 @@ function checkAllSubtaskParticipants(checkpoint, subtask) {
   saveHub();
 }
 
+// ------------------------ WRAPPING MUTATIONS ---------------------
+
+function applyOperation(op, remote = false) {
+  switch (op.type) {
+
+    case "toggleParticipantDone": {
+      const { checkpointId, subtaskId, participant } = op.payload;
+      const c = getCheckpoints().find(c => c.id === checkpointId);
+      const st = c?.subtasks.find(s => s.id === subtaskId);
+      if (!st) return;
+
+      st.participants[participant] = !st.participants[participant];
+      syncCheckpointCompletion(c);
+      break;
+    }
+
+    case "renameCheckpoint": {
+      const { checkpointId, name } = op.payload;
+      const c = getCheckpoints().find(c => c.id === checkpointId);
+      if (c) c.name = name;
+      break;
+    }
+
+    case "addCheckpoint": {
+      const list = getActiveList();
+      if (!list) return;
+
+      list.checkpoints.push({
+        id: generateId(),
+        name: op.payload.name,
+        expanded: true,
+        owner: null,
+        subtasks: []
+      });
+      break;
+    }
+
+    case "renameSubtask": {
+      const { checkpointId, subtaskId, name } = op.payload;
+      const c = getCheckpoints().find(c => c.id === checkpointId);
+      const st = c?.subtasks.find(s => s.id === subtaskId);
+      if (st) st.name = name;
+      break;
+    }
+
+    case "addSubtask": {
+      const { checkpointId, name, participants } = op.payload;
+      const c = getCheckpoints().find(c => c.id === checkpointId);
+      if (!c) return;
+
+      c.subtasks.push({
+        id: generateId(),
+        name,
+        participants
+      });
+
+      syncCheckpointCompletion(c);
+      break;
+    }
+
+    case "setCheckpointOwner": {
+      const { checkpointId, owner } = op.payload;
+      const c = getCheckpoints().find(c => c.id === checkpointId);
+      if (c) c.owner = owner;
+      break;
+    }
+  }
+
+  saveHub();
+  render();
+
+  if (!remote && ws) {
+    ws.send(JSON.stringify({
+      type: "op",
+      shareId: currentShareId,
+      op
+    }));
+  }
+}
+
 // ---------------- RENDERING ----------------
 function render() {
   const participants = getParticipants();
@@ -915,9 +1046,13 @@ function render() {
     const nameEditor = makeInlineEditable({
       text: c.name,
       onSave: newName => {
-        c.name = newName;
-        saveHub();
-        render();
+        applyOperation({
+          type: "renameCheckpoint",
+          payload: {
+            checkpointId: c.id,
+            name: newName
+          }
+        });
       }
     });
 
@@ -953,11 +1088,6 @@ function render() {
       ownerSelect.appendChild(opt);
     });
 
-    ownerSelect.addEventListener("change", () => {
-      setCheckpointOwner(c, ownerSelect.value || null);
-      render();
-    });
-
     if (c.owner) {
       const ownerLabel = document.createElement("span");
       ownerLabel.textContent = `👤 ${c.owner}`;
@@ -968,6 +1098,17 @@ function render() {
     }
 
     h2.appendChild(ownerSelect);
+
+    ownerSelect.addEventListener("change", () => {
+      applyOperation({
+        type: "setCheckpointOwner",
+        payload: {
+          checkpointId: c.id,
+          owner: ownerSelect.value || null
+        }
+      });
+    });
+
 
     // Expand / Collapse button
     const toggleBtn = document.createElement("button");
@@ -1001,9 +1142,14 @@ function render() {
       const stNameEditor = makeInlineEditable({
         text: st.name,
         onSave: newName => {
-          st.name = newName;
-          saveHub();
-          render();
+          applyOperation({
+            type: "renameSubtask",
+            payload: {
+              checkpointId: c.id,
+              subtaskId: st.id,
+              name: newName
+            }
+          });
         }
       });
 
@@ -1031,8 +1177,14 @@ function render() {
         input.className = "participant-checkbox";
         input.checked = st.participants[p];
         input.addEventListener("change", () => {
-          toggleParticipantDone(c, st, p);
-          render();
+          applyOperation({
+            type: "toggleParticipantDone",
+            payload: {
+              checkpointId: c.id,
+              subtaskId: st.id,
+              participant: p
+            }
+          });
         });
 
         label.appendChild(input);
